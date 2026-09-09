@@ -3275,11 +3275,18 @@ function tryCode(raw){
     $('codeErr').textContent = '서버에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.';
   }).then(function(){ codeBusy = false; });
 }
-$('codeGo').onclick = function(){ tryCode($('codeInp').value); };
-$('codeInp').addEventListener('keydown', function(e){ if(e.key==='Enter') tryCode(this.value); });
+$('codeGo').onclick = function(){ clearTimeout(codeAutoT); tryCode($('codeInp').value); };
+$('codeInp').addEventListener('keydown', function(e){ if(e.key==='Enter'){ clearTimeout(codeAutoT); tryCode(this.value); } });
+var codeAutoT = null;
 $('codeInp').addEventListener('input', function(){
   this.value = this.value.replace(/\D/g,'').slice(0,8);
-  if(this.value.length===6 || this.value.length===8) tryCode(this.value);
+  clearTimeout(codeAutoT);
+  var el = this;
+  if(el.value.length===8) tryCode(el.value);               // 더 칠 게 없으니 바로 제출
+  else if(el.value.length===6){
+    // 학생(6자리)인지, 교직원(8자리) 입력 중인지 알 수 없으니 잠깐 기다렸다가 더 안 치면 제출
+    codeAutoT = setTimeout(function(){ if(el.value.length===6) tryCode(el.value); }, 350);
+  }
 });
 $('cfNo').onclick = goHome;
 $('exitBtn').onclick = goHome;
