@@ -3385,9 +3385,10 @@ $('doneOut').onclick = goHome;
 
 $('cfYes').onclick = function(){
   var btn = this; btn.disabled = true; btn.textContent = '확인하는 중…';
-  var chk = (API && ONLINE) ? jsonp({action:'check', code:ME.code})
+  var chk = API ? jsonp({action:'check', code:ME.code})
                     .then(function(d){
                       if(d && d.ok){
+                        ONLINE = true;
                         if(typeof d.open === 'boolean') CFG.open = d.open;
                         return d.vote;
                       }
@@ -3476,16 +3477,16 @@ function saveLocal(code, rec, pending){
 }
 function submitVote(){
   var me = ME, rec = { c:PICK, t:new Date().toISOString(), k:me.k, where:whereOf(me), name:me.name };
-  if(!(API && ONLINE)){
+  if(!API){
     if(VOTES[me.code]){ showDone(VOTES[me.code].c, true); return Promise.resolve(false); }
-    saveLocal(me.code, rec, !!API);
+    saveLocal(me.code, rec, false);
     return Promise.resolve(true);
   }
   var params = {action:'vote', code:me.code, cid:PICK, kind:me.k, where:whereOf(me), name:me.name};
   var attempt = function(){
     return jsonp(params).then(function(d){
-      if(d && d.ok){ VOTES[me.code] = rec; return 'ok'; }
-      if(d && d.dup){ VOTES[me.code] = d.vote || rec; return 'dup'; }
+      if(d && d.ok){ ONLINE = true; VOTES[me.code] = rec; return 'ok'; }
+      if(d && d.dup){ ONLINE = true; VOTES[me.code] = d.vote || rec; return 'dup'; }
       return 'fail';
     });
   };
@@ -3498,6 +3499,7 @@ function submitVote(){
     })
     .catch(function(){
       // 두 번 다 실패 — 표를 잃지 않도록 이 기기에 보관해 두고 나중에 자동으로 올린다
+      ONLINE = false;
       saveLocal(me.code, rec, true);
       toast('연결이 불안정해 이 기기에 저장했습니다. 나중에 자동으로 전송됩니다.','bad');
       return true;
@@ -3505,7 +3507,7 @@ function submitVote(){
 }
 /* 보관해 둔 표를 시트에 올린다 */
 function flushPending(){
-  if(!(API && ONLINE)) return Promise.resolve();
+  if(!API) return Promise.resolve();
   var q = jget(K.pend, []);
   if(!q.length) return Promise.resolve();
   var left = q.slice(0, 8), rest = q.slice(8), done = [];
@@ -3701,11 +3703,11 @@ bindDelete('adStaffTbl');
 bindDelete('adFindOut', function(){ adFind($('adFind').value); });
 
 function resetVote(code, pw){
-  if(API && ONLINE){
+  if(API){
     return jsonp({action:'reset', code:code, pw:pw}).then(function(d){
-      if(d && d.ok){ delete VOTES[code]; return true; }
+      if(d && d.ok){ ONLINE = true; delete VOTES[code]; return true; }
       toast((d&&d.msg)||'삭제하지 못했습니다','bad'); return false;
-    }).catch(function(e){ toast(e.message,'bad'); return false; });
+    }).catch(function(e){ ONLINE = false; toast(e.message,'bad'); return false; });
   }
   delete VOTES[code]; jset(K.votes, VOTES);
   return Promise.resolve(true);
@@ -3887,9 +3889,9 @@ $('openSeg').addEventListener('click', function(e){
   var b = e.target.closest('button'); if(!b) return;
   CFG.open = b.dataset.v === '1';
   var done = function(ok){ renderData(); toast(ok ? (CFG.open?'투표를 열었습니다':'투표를 닫았습니다') : '바꾸지 못했습니다', ok?'ok':'bad'); };
-  if(API && ONLINE){
+  if(API){
     jsonp({action:'setopen', val:CFG.open?'1':'0', pw:ADMIN_PW})
-      .then(function(d){ done(!!(d&&d.ok)); }).catch(function(){ done(false); });
+      .then(function(d){ var ok = !!(d&&d.ok); ONLINE = ok || ONLINE; done(ok); }).catch(function(){ ONLINE=false; done(false); });
   } else { jset(K.cfg, CFG); done(true); }
 });
 $('dlCsv').onclick = function(){
@@ -3927,10 +3929,10 @@ $('upCfg').addEventListener('change', function(){
 $('wipeAll').onclick = function(){
   if(!confirm('투표 결과를 모두 지웁니다. 되돌릴 수 없습니다. 계속할까요?')) return;
   if(prompt('확인을 위해 관리자 비밀번호를 넣어 주세요') !== ADMIN_PW){ toast('비밀번호가 다릅니다','bad'); return; }
-  var p = (API && ONLINE) ? jsonp({action:'wipe', pw:ADMIN_PW}).then(function(d){ return !!(d&&d.ok); }).catch(function(){ return false; })
-                          : Promise.resolve(true);
+  var p = API ? jsonp({action:'wipe', pw:ADMIN_PW}).then(function(d){ var ok=!!(d&&d.ok); if(ok) ONLINE=true; return ok; }).catch(function(){ ONLINE=false; return false; })
+              : Promise.resolve(true);
   p.then(function(ok){
-    if(ok || !(API && ONLINE)){ VOTES = {}; jset(K.votes, VOTES); renderAdmin(); toast('모두 지웠습니다','ok'); }
+    if(ok || !API){ VOTES = {}; jset(K.votes, VOTES); renderAdmin(); toast('모두 지웠습니다','ok'); }
     else toast('지우지 못했습니다','bad');
   });
 };
