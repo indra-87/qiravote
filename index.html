@@ -3258,7 +3258,7 @@ function bootLoad(){
       CFG = newer(localCfg, fc) || defaultConfig();
       return;
     }
-    return jsonp({action:'cfg', v: localCfg ? localCfg.updatedAt : 0}).then(function(d){
+    return jsonp({action:'cfg', ver: localCfg ? localCfg.updatedAt : 0}).then(function(d){
       if(!d || !d.ok) throw new Error('응답 오류');
       ONLINE = true;
       if(d.same && localCfg) CFG = localCfg;
@@ -3481,7 +3481,7 @@ function submitVote(){
     saveLocal(me.code, rec, !!API);
     return Promise.resolve(true);
   }
-  var params = {action:'vote', code:me.code, c:PICK, k:me.k, where:whereOf(me), name:me.name};
+  var params = {action:'vote', code:me.code, cid:PICK, kind:me.k, where:whereOf(me), name:me.name};
   var attempt = function(){
     return jsonp(params).then(function(d){
       if(d && d.ok){ VOTES[me.code] = rec; return 'ok'; }
@@ -3513,7 +3513,7 @@ function flushPending(){
     return chain.then(function(){
       var v = VOTES[code], who = byCode[code];
       if(!v || !who){ done.push(code); return; }
-      return jsonp({action:'vote', code:code, c:v.c, k:who.k, where:whereOf(who), name:who.name})
+      return jsonp({action:'vote', code:code, cid:v.c, kind:who.k, where:whereOf(who), name:who.name})
         .then(function(d){ if(d && (d.ok || d.dup)) done.push(code); })
         .catch(function(){});
     });
@@ -3849,7 +3849,7 @@ function saveConfig(){
 function savePost(){
   return postJSON({action:'config', pw:ADMIN_PW, config:CFG})
     .then(function(){ return sleep(2000); })
-    .then(function(){ return jsonp({action:'cfg', v:0}); })
+    .then(function(){ return jsonp({action:'cfg', ver:0}); })
     .then(function(d){ return !!(d && d.ok && d.config && +d.config.updatedAt === CFG.updatedAt); })
     .catch(function(){ return false; });
 }
@@ -3888,7 +3888,7 @@ $('openSeg').addEventListener('click', function(e){
   CFG.open = b.dataset.v === '1';
   var done = function(ok){ renderData(); toast(ok ? (CFG.open?'투표를 열었습니다':'투표를 닫았습니다') : '바꾸지 못했습니다', ok?'ok':'bad'); };
   if(API && ONLINE){
-    jsonp({action:'setopen', v:CFG.open?'1':'0', pw:ADMIN_PW})
+    jsonp({action:'setopen', val:CFG.open?'1':'0', pw:ADMIN_PW})
       .then(function(d){ done(!!(d&&d.ok)); }).catch(function(){ done(false); });
   } else { jset(K.cfg, CFG); done(true); }
 });
