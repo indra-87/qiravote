@@ -3510,14 +3510,17 @@ function flushPending(){
   if(!API) return Promise.resolve();
   var q = jget(K.pend, []);
   if(!q.length) return Promise.resolve();
+  var localVotes = jget(K.votes, {});   // 보관된 표는 로컬 저장소에서 읽는다 (VOTES는 시트 연결 시 비어 있을 수 있음)
   var left = q.slice(0, 8), rest = q.slice(8), done = [];
   return left.reduce(function(chain, code){
     return chain.then(function(){
-      var v = VOTES[code], who = byCode[code];
-      if(!v || !who){ done.push(code); return; }
+      var v = localVotes[code], who = byCode[code];
+      if(!v || !who){ done.push(code); return; }   // 명단에 없는 코드 등 정말 보낼 수 없는 경우만 버린다
       return jsonp({action:'vote', code:code, cid:v.c, kind:who.k, where:whereOf(who), name:who.name})
-        .then(function(d){ if(d && (d.ok || d.dup)) done.push(code); })
-        .catch(function(){});
+        .then(function(d){
+          if(d && (d.ok || d.dup)){ ONLINE = true; VOTES[code] = d.vote || v; done.push(code); }
+        })
+        .catch(function(){});   // 이번에도 실패하면 다음 접속 때 다시 시도 — 목록에 그대로 남겨둔다
     });
   }, Promise.resolve()).then(function(){
     var still = q.filter(function(c){ return done.indexOf(c) < 0; });
