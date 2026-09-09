@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -3215,19 +3216,42 @@ function candName(id){ var c = candById(id); return c ? c.name : '(삭제된 항
 
 /* ══════════════ 서버 통신 ══════════════ */
 var cbN = 0;
-function jsonp(params){
+function jsonp(params, timeout){
   return new Promise(function(res, rej){
     if(!API){ rej(new Error('시트가 연결되지 않았습니다')); return; }
-    var cb = '__qira_cb' + (++cbN), done = false;
+    /* 페이지를 다시 열어도 겹치지 않는 콜백명과 캐시 방지값을 사용한다. */
+    var cb = '__qira_cb_' + Date.now() + '_' + (++cbN) + '_' + Math.floor(Math.random()*1000000);
+    var done = false, timer = null;
     var s = document.createElement('script');
-    function clean(){ done = true; try{ delete window[cb]; }catch(e){ window[cb] = undefined; } if(s.parentNode) s.parentNode.removeChild(s); }
+    function clean(){
+      done = true;
+      if(timer) clearTimeout(timer);
+      if(s.parentNode) s.parentNode.removeChild(s);
+      /* 늦게 도착한 JSONP가 "callback is not a function" 오류를 내지 않게 잠시 무해한 함수를 둔다. */
+      window[cb] = function(){};
+      setTimeout(function(){ try{ delete window[cb]; }catch(e){ window[cb] = undefined; } }, 60000);
+    }
     window[cb] = function(d){ if(done) return; clean(); res(d); };
     s.onerror = function(){ if(done) return; clean(); rej(new Error('시트에 연결하지 못했습니다')); };
-    var q = Object.keys(params).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(params[k]); }).join('&');
-    s.src = API + (API.indexOf('?')>=0?'&':'?') + q + '&callback=' + cb;
-    setTimeout(function(){ if(!done){ clean(); rej(new Error('응답 시간이 초과되었습니다')); } }, 25000);
-    document.head.appendChild(s);
+    var p = {};
+    Object.keys(params||{}).forEach(function(k){ p[k] = params[k]; });
+    p._qira = Date.now() + '_' + cbN;
+    var q = Object.keys(p).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(p[k]); }).join('&');
+    s.async = true;
+    s.src = API + (API.indexOf('?')>=0?'&':'?') + q + '&callback=' + encodeURIComponent(cb);
+    timer = setTimeout(function(){ if(!done){ clean(); rej(new Error('응답 시간이 초과되었습니다')); } }, timeout || 45000);
+    (document.head || document.documentElement).appendChild(s);
   });
+}
+function jsonpRetry(params, tries){
+  tries = tries || 2;
+  function run(n){
+    return jsonp(params, 45000).catch(function(err){
+      if(n >= tries) throw err;
+      return sleep(900*n).then(function(){ return run(n+1); });
+    });
+  }
+  return run(1);
 }
 function postJSON(payload){
   return fetch(API, { method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(payload) });
@@ -3267,7 +3291,7 @@ function bootLoad(){
     }).catch(function(){
       ONLINE = false; VOTES = jget(K.votes, {});
       CFG = newer(localCfg, fc) || defaultConfig();
-      toast('시트에 연결하지 못해 이 기기에만 저장됩니다','bad');
+      toast('시트 연결이 지연되고 있습니다. 투표 제출할 때 다시 연결합니다.','bad');
     });
   });
 }
@@ -3387,33 +3411,36 @@ $('cfYes').onclick = function(){
   var btn = this, code = ME.code;
   btn.disabled = true; btn.textContent = '확인하는 중…';
 
-  /* 서버가 연결된 경우에는 서버 상태만 최종 기준으로 삼는다.
-     관리자가 다른 기기에서 표를 삭제했을 때 이 기기에 남은 오래된 로컬 표/대기표도 함께 지운다. */
-  var chk = API ? jsonp({action:'check', code:code, _:Date.now()})
-                    .then(function(d){
-                      if(!d || !d.ok) throw new Error((d && d.msg) || '투표 여부를 확인하지 못했습니다');
-                      ONLINE = true;
-                      if(typeof d.open === 'boolean') CFG.open = d.open;
-                      if(d.vote){
-                        VOTES[code] = d.vote;
-                        var lv1 = jget(K.votes, {}); lv1[code] = d.vote; jset(K.votes, lv1);
-                        return d.vote;
-                      }
-                      clearLocalVote(code);
-                      return null;
-                    })
-                    .catch(function(err){
-                      ONLINE = false;
-                      throw err;
-                    })
-                : Promise.resolve(VOTES[code]||null);
-
-  chk.then(function(v){
-    if(v){ showDone(v.c, true); return; }
+  function enterVote(){
     if(!CFG.open){ toast('지금은 투표 기간이 아닙니다','bad'); return; }
     PICK = null; renderCands(); show('scVote');
+  }
+
+  /* 모바일에서는 Apps Script JSONP 리다이렉트가 일시적으로 늦거나 막힐 수 있다.
+     본인 확인 단계의 통신 실패로 투표 화면 진입을 차단하지 않는다.
+     실제 시트 저장 성공 여부는 "투표 완료하기" 단계에서 반드시 검증한다. */
+  if(!API){
+    enterVote();
+    btn.disabled = false; btn.textContent = '맞아요, 투표할래요';
+    return;
+  }
+
+  jsonpRetry({action:'check', code:code}, 2).then(function(d){
+    if(!d || !d.ok) throw new Error((d&&d.msg) || '확인 응답 오류');
+    ONLINE = true;
+    var lv = jget(K.votes, {});
+    if(d.vote){
+      VOTES[code] = d.vote; lv[code] = d.vote; jset(K.votes, lv);
+      showDone(d.vote.c, true);
+      return;
+    }
+    clearLocalVote(code);
+    if(typeof d.open === 'boolean') CFG.open = d.open;
+    enterVote();
   }).catch(function(){
-    toast('구글 시트에 연결하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 눌러 주세요.','bad');
+    ONLINE = false;
+    enterVote();
+    toast('모바일 연결 확인이 지연되어 투표 화면으로 이동했습니다. 제출할 때 시트 저장을 다시 확인합니다.','bad');
   }).then(function(){
     btn.disabled = false; btn.textContent = '맞아요, 투표할래요';
   });
@@ -3470,99 +3497,58 @@ function paintPick(){
   $('submitVote').disabled = !PICK;
 }
 $('submitVote').onclick = function(){
-  if(!PICK) return;
-  $('mdPick').textContent = candName(PICK);
-  $('voteOvl').classList.add('show');
-};
-$('mdCancel').onclick = function(){ $('voteOvl').classList.remove('show'); };
-$('mdOk').onclick = function(){
-  var btn = this; btn.disabled = true; btn.textContent = '제출하는 중…';
-  submitVote().then(function(ok){
-    btn.disabled = false; btn.textContent = '투표 제출';
-    $('voteOvl').classList.remove('show');
-    if(ok) showDone(PICK, false);
-  });
-};
-function saveLocal(code, rec, pending){
-  VOTES[code] = rec; jset(K.votes, VOTES);
-  if(pending){
-    var q = jget(K.pend, []);
-    if(q.indexOf(code) < 0){ q.push(code); jset(K.pend, q); }
+  if(!PICK || !ME) return;
+  var btn=this;
+  btn.disabled=true; btn.textContent='시트에 저장하는 중…';
+  var vote = { c:PICK, t:new Date().toISOString(), k:ME.k, where:whereOf(ME), name:ME.name };
+  var params = { action:'vote', code:ME.code, kind:ME.k, where:whereOf(ME), name:ME.name, cid:PICK };
+
+  function verifySaved(){
+    return jsonpRetry({action:'check', code:ME.code}, 3).then(function(d){
+      if(!d || !d.ok || !d.vote) throw new Error((d&&d.msg) || '시트 저장을 확인하지 못했습니다');
+      if(String(d.vote.c) !== String(PICK)) throw new Error('시트의 투표 내용이 선택한 항목과 다릅니다');
+      return d.vote;
+    });
   }
-}
-function clearLocalVote(code){
-  delete VOTES[code];
-  var lv = jget(K.votes, {}); delete lv[code]; jset(K.votes, lv);
-  var q = jget(K.pend, []).filter(function(c){ return c !== code; });
-  jset(K.pend, q);
-}
-function submitVote(){
-  var me = ME, rec = { c:PICK, t:new Date().toISOString(), k:me.k, where:whereOf(me), name:me.name };
+
   if(!API){
-    toast('구글 시트가 연결되지 않아 투표를 제출할 수 없습니다. 관리자에게 알려 주세요.','bad');
-    return Promise.resolve(false);
+    toast('Apps Script 웹앱 주소가 없어 투표를 저장할 수 없습니다. 관리자에게 알려 주세요.','bad');
+    btn.disabled=false; btn.textContent='투표 완료하기';
+    return;
   }
-  var params = {action:'vote', code:me.code, cid:PICK, kind:me.k, where:whereOf(me), name:me.name, _:Date.now()};
-  var attempt = function(){
-    return jsonp(params).then(function(d){
-      if(d && d.ok){
-        ONLINE = true;
-        /* appendRow 뒤 check로 실제 저장까지 확인한다. 완료 화면은 검증 성공 후에만 연다. */
-        return jsonp({action:'check', code:me.code, _:Date.now()}).then(function(c){
-          if(c && c.ok && c.vote && String(c.vote.c) === String(PICK)){
-            var saved = c.vote;
-            VOTES[me.code] = saved;
-            var lv = jget(K.votes, {}); lv[me.code] = saved; jset(K.votes, lv);
-            var q = jget(K.pend, []).filter(function(x){ return x !== me.code; }); jset(K.pend, q);
-            return 'ok';
-          }
-          throw new Error('시트 저장 결과를 확인하지 못했습니다');
-        });
+
+  jsonpRetry(params, 3).then(function(d){
+    if(d && d.ok) return verifySaved();
+    /* 첫 요청이 저장된 뒤 응답만 유실되면 재시도에서 dup가 올 수 있다. 이것도 서버 저장 성공이다. */
+    if(d && d.dup && d.vote){
+      if(String(d.vote.c) !== String(PICK)) {
+        var er = new Error('이미 다른 후보에게 투표한 기록이 있습니다'); er.dupVote = d.vote; throw er;
       }
-      if(d && d.dup){
-        ONLINE = true; VOTES[me.code] = d.vote || rec; return 'dup';
-      }
-      throw new Error((d && d.msg) || '투표를 저장하지 못했습니다');
-    });
-  };
-  return attempt()
-    .catch(function(){ return sleep(1000).then(attempt); })
-    .then(function(r){
-      if(r === 'ok') return true;
-      if(r === 'dup'){ showDone(VOTES[me.code].c, true); return false; }
-      return false;
-    })
-    .catch(function(){
-      ONLINE = false;
-      /* 실패한 표는 자동 재전송하지 않는다. 관리자가 삭제한 표가 되살아나는 것을 막는다. */
-      clearLocalVote(me.code);
-      toast('구글 시트에 투표가 저장되지 않았습니다. 인터넷 연결을 확인한 뒤 다시 제출해 주세요.','bad');
-      return false;
-    });
-}
-/* 보관해 둔 표를 시트에 올린다 */
-function flushPending(){
-  if(!API) return Promise.resolve();
-  var q = jget(K.pend, []);
-  if(!q.length) return Promise.resolve();
-  var localVotes = jget(K.votes, {});   // 보관된 표는 로컬 저장소에서 읽는다 (VOTES는 시트 연결 시 비어 있을 수 있음)
-  var left = q.slice(0, 8), rest = q.slice(8), done = [];
-  return left.reduce(function(chain, code){
-    return chain.then(function(){
-      var v = localVotes[code], who = byCode[code];
-      if(!v || !who){ done.push(code); return; }   // 명단에 없는 코드 등 정말 보낼 수 없는 경우만 버린다
-      return jsonp({action:'vote', code:code, cid:v.c, kind:who.k, where:whereOf(who), name:who.name})
-        .then(function(d){
-          if(d && (d.ok || d.dup)){ ONLINE = true; VOTES[code] = d.vote || v; done.push(code); }
-        })
-        .catch(function(){});   // 이번에도 실패하면 다음 접속 때 다시 시도 — 목록에 그대로 남겨둔다
-    });
-  }, Promise.resolve()).then(function(){
-    var still = q.filter(function(c){ return done.indexOf(c) < 0; });
-    jset(K.pend, still);
-    if(done.length) toast('보관해 둔 투표 ' + done.length + '건을 전송했습니다','ok');
+      return d.vote;
+    }
+    throw new Error((d&&d.msg) || '구글 시트 저장에 실패했습니다');
+  }).then(function(serverVote){
+    ONLINE = true;
+    VOTES[ME.code] = serverVote || vote;
+    var lv = jget(K.votes, {}); lv[ME.code] = serverVote || vote; jset(K.votes, lv);
+    clearPending(ME.code);
+    showDone((serverVote && serverVote.c) || PICK, false);
+  }).catch(function(err){
+    ONLINE = false;
+    if(err && err.dupVote){
+      VOTES[ME.code] = err.dupVote;
+      var lv = jget(K.votes, {}); lv[ME.code] = err.dupVote; jset(K.votes, lv);
+      clearPending(ME.code);
+      showDone(err.dupVote.c, true);
+      toast('이 확인코드로 이미 저장된 투표가 있습니다.','bad');
+      return;
+    }
+    clearPending(ME.code);
+    toast('구글 시트에 투표를 저장하지 못했습니다. Chrome 또는 Safari에서 다시 눌러 주세요.','bad');
+    btn.disabled=false; btn.textContent='투표 완료하기';
   });
-}
+};
+
 function showDone(choiceId, already){
   $('doneWho').textContent = ME ? (whereOf(ME)+' '+ME.name) : '';
   $('donePick').textContent = candName(choiceId);
