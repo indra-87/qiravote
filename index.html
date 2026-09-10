@@ -3995,7 +3995,7 @@ bootLoad().then(function(){
   flushPending();
   var p = new URLSearchParams(location.search);
   var code = (p.get('code')||'').replace(/\D/g,'');
-  if(code && code.length===6) tryCode(code);
+  if(code && (code.length===6 || code.length===8)) tryCode(code);
   else { show('scLogin'); setTimeout(function(){ $('codeInp').focus(); }, 120); }
 });
 })();
