@@ -645,7 +645,7 @@ textarea.inp{min-height:90px;resize:vertical;line-height:1.55}
     <div class="card pad">
       <h3 style="margin-bottom:6px">반별 투표 결과 수기 입력</h3>
       <p class="hint" style="margin-bottom:16px">
-        앱으로 투표하기 어려운 반(예: 저학년)은 손을 들거나 종이로 집계한 숫자를 여기에 넣으면 전체 결과에 자동으로 합산됩니다.
+        앱으로 투표하기 어려운 반(예: 저학년)은 손을 들거나 종이로 집계한 숫자를 여기에 넣으면 전체 결과와 투표율에 자동으로 반영됩니다.
         인원수를 맞출 필요는 없고, 숫자만 정확하면 됩니다.
       </p>
       <div id="tManualForm"></div>
@@ -3465,10 +3465,11 @@ function tallyList(list){
       if(row.grade===gc.g && row.class_no===gc.c && row.count>0){
         if(!(row.candidate_id in counts)) counts[row.candidate_id]=0;
         counts[row.candidate_id] += row.count;
+        voted += row.count;   // 수기 집계 표 수도 그 반의 투표율에 바로 반영
       }
     });
   });
-  return { total:list.length, voted:voted, counts:counts };
+  return { total:list.length, voted:Math.min(voted, list.length), counts:counts };
 }
 function barRow(label, val, max, right, cls){
   var w = max>0 ? (val/max*100) : 0;
