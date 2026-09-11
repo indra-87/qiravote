@@ -3969,16 +3969,29 @@ function renderManual(){
   if(TSCOPE==='T'){ el.innerHTML = ''; return; }
   var sel = tSel();
   var cur = currentTallyFor(sel.g, sel.c);
-  el.innerHTML = '<div class="hint" style="margin-bottom:10px">'+sel.g+'학년 '+sel.c+'반 · 학생 '+roster(sel.g,sel.c).length+'명</div>'
+  var roster_n = roster(sel.g,sel.c).length;
+  el.innerHTML = '<div class="hint" style="margin-bottom:10px">'+sel.g+'학년 '+sel.c+'반 · 학생 '+roster_n+'명</div>'
     + CFG.candidates.map(function(cd){
         var v = cur[cd.id] || 0;
         return '<div class="row" style="align-items:center;margin-bottom:8px">'
           + '<div style="flex:1">'+esc(cd.name)+'</div>'
           + '<input type="number" min="0" class="inp tManualN" data-cid="'+cd.id+'" value="'+v+'" style="width:100px">'
           + '</div>';
-      }).join('');
+      }).join('')
+    + '<div class="hint" id="tManualSum" style="margin-top:6px"></div>';
   $('tManualState').textContent = '';
+  updateManualSum();
 }
+function updateManualSum(){
+  var sumEl = $('tManualSum'); if(!sumEl) return;
+  var sel = tSel(), roster_n = roster(sel.g,sel.c).length, sum = 0;
+  Array.prototype.forEach.call($('tManualForm').querySelectorAll('.tManualN'), function(inp){
+    sum += Math.max(0, parseInt(inp.value,10) || 0);
+  });
+  sumEl.textContent = '합계 '+sum+'표 / 학생 '+roster_n+'명';
+  sumEl.style.color = sum > roster_n ? 'var(--stamp)' : 'var(--ink3)';
+}
+$('tManualForm').addEventListener('input', function(e){ if(e.target.classList.contains('tManualN')) updateManualSum(); });
 $('tManualSave').onclick = function(){
   var sel = tSel();
   var counts = {};
