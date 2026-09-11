@@ -622,6 +622,7 @@ textarea.inp{min-height:90px;resize:vertical;line-height:1.55}
   </div>
   <div class="tabs noprint" id="teacherTabs">
     <button data-p="tStatus" class="on">투표 현황</button>
+    <button data-p="tManual">수기 입력</button>
     <button data-p="tReset">학생 재투표</button>
     <button data-p="tPrint">코드·QR 인쇄</button>
   </div>
@@ -629,8 +630,27 @@ textarea.inp{min-height:90px;resize:vertical;line-height:1.55}
   <section class="panel on noprint" id="tStatus">
     <div class="stat-row" id="tStats"></div>
     <div class="card pad">
-      <h3 style="margin-bottom:14px" id="tListTitle">우리 반 명단</h3>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h3 id="tListTitle">우리 반 명단</h3>
+        <div class="row" id="tMarkBar" style="gap:8px">
+          <button class="btn sm ghost" id="tMarkSel">선택 투표완료 처리</button>
+          <button class="btn sm ghost" id="tMarkAll">전체 투표완료 처리</button>
+        </div>
+      </div>
       <div class="tbl-wrap"><table class="tbl" id="tTbl"></table></div>
+    </div>
+  </section>
+
+  <section class="panel noprint" id="tManual">
+    <div class="card pad">
+      <h3 style="margin-bottom:6px">반별 투표 결과 수기 입력</h3>
+      <p class="hint" style="margin-bottom:16px">
+        앱으로 투표하기 어려운 반(예: 저학년)은 손을 들거나 종이로 집계한 숫자를 여기에 넣으면 전체 결과에 자동으로 합산됩니다.
+        인원수를 맞출 필요는 없고, 숫자만 정확하면 됩니다.
+      </p>
+      <div id="tManualForm"></div>
+      <button class="btn" id="tManualSave" style="margin-top:16px">이 반 집계 저장</button>
+      <p class="hint" id="tManualState" style="margin-top:10px"></p>
     </div>
   </section>
 
@@ -3135,7 +3155,7 @@ var ROLEPW = '';
 var ME = null, PICK = null;
 
 function candById(id){ for(var i=0;i<CFG.candidates.length;i++) if(CFG.candidates[i].id===id) return CFG.candidates[i]; return null; }
-function candName(id){ var c = candById(id); return c ? c.name : '(삭제된 항목)'; }
+function candName(id){ if(!id) return '(참여만 표시)'; var c = candById(id); return c ? c.name : '(삭제된 항목)'; }
 
 /* ══════════════ 서버 통신 (Supabase) ══════════════ */
 /* 학생·교직원 접속: 후보 목록 + 투표 열림 여부만 받아온다 (비밀번호 필요 없음). */
@@ -3167,6 +3187,7 @@ function loadVotes(){
     CURROLE = d.role;
     CFG.open = d.open;
     applyRoster(d.students, d.staff);
+    CLASS_TALLY = d.tally || [];
     VOTES = {};
     (d.votes||[]).forEach(function(v){
       VOTES[v.code] = {c:v.candidate_id, t:v.voted_at, k:v.kind, where:v.where_text, name:v.voter_name};
@@ -3428,12 +3449,24 @@ function showDone(choiceId, already){
 }
 
 /* ══════════════ 집계 ══════════════ */
+var CLASS_TALLY = [];
 function tallyList(list){
   var counts = {}; CFG.candidates.forEach(function(c){ counts[c.id]=0; });
   var voted = 0;
+  var gcSeen = {};
   list.forEach(function(s){
     var v = VOTES[s.code];
-    if(v && v.c){ voted++; if(!(v.c in counts)) counts[v.c]=0; counts[v.c]++; }
+    if(v){ voted++; if(v.c){ if(!(v.c in counts)) counts[v.c]=0; counts[v.c]++; } }
+    if(s.k==='S'){ var key=s.g+'_'+s.c; if(!gcSeen[key]) gcSeen[key]={g:s.g,c:s.c}; }
+  });
+  Object.keys(gcSeen).forEach(function(key){
+    var gc = gcSeen[key];
+    CLASS_TALLY.forEach(function(row){
+      if(row.grade===gc.g && row.class_no===gc.c && row.count>0){
+        if(!(row.candidate_id in counts)) counts[row.candidate_id]=0;
+        counts[row.candidate_id] += row.count;
+      }
+    });
   });
   return { total:list.length, voted:voted, counts:counts };
 }
@@ -3824,6 +3857,10 @@ $('tScope').addEventListener('click', function(e){
   $('tGradeWrap').hidden = (TSCOPE==='T');
   $('tClassWrap').hidden = (TSCOPE==='T');
   $('printScope').hidden = (TSCOPE==='T');
+  $('teacherTabs').querySelector('[data-p="tManual"]').hidden = (TSCOPE==='T');
+  if(TSCOPE==='T' && $('teacherTabs').querySelector('[data-p="tManual"]').classList.contains('on')){
+    $('teacherTabs').querySelector('[data-p="tStatus"]').click();
+  }
   renderTeacher();
 });
 function fillGradeSel(){
@@ -3851,10 +3888,11 @@ function renderTeacher(){
         stat('교직원 투표율', pct(tt.voted,tt.total)+'%', tt.voted+'명 / '+tt.total+'명', true)
       + stat('아직 안 한 분', (tt.total-tt.voted)+'명', '');
     $('tListTitle').textContent = '교직원 명단';
-    var h = ['<thead><tr><th>직위</th><th>성명</th><th>확인코드</th><th>상태</th><th></th></tr></thead><tbody>'];
+    var h = ['<thead><tr><th></th><th>직위</th><th>성명</th><th>확인코드</th><th>상태</th><th></th></tr></thead><tbody>'];
     list.forEach(function(s){
       var v = VOTES[s.code];
-      h.push('<tr><td>'+esc(s.pos)+'</td><td>'+esc(s.name)+'</td><td>'+s.code+'</td>'
+      h.push('<tr><td>'+(v?'':'<input type="checkbox" class="tChk" data-code="'+s.code+'">')+'</td>'
+        + '<td>'+esc(s.pos)+'</td><td>'+esc(s.name)+'</td><td>'+s.code+'</td>'
         + '<td>'+(v ? '<span class="pill yes">투표함</span>' : '<span class="pill no">아직</span>')+'</td>'
         + '<td>'+(v ? '<button class="btn sm ghost" data-tdel="'+s.code+'">재투표</button>' : '')+'</td></tr>');
     });
@@ -3868,16 +3906,18 @@ function renderTeacher(){
       + stat('아직 안 한 학생', (tc.total-tc.voted)+'명', '')
       + stat(sel.g+'학년 전체 투표율', pct(tg.voted,tg.total)+'%', tg.voted+'명 / '+tg.total+'명');
     $('tListTitle').textContent = sel.g+'학년 '+sel.c+'반 명단';
-    var h2 = ['<thead><tr><th>번호</th><th>이름</th><th>확인코드</th><th>상태</th><th></th></tr></thead><tbody>'];
+    var h2 = ['<thead><tr><th></th><th>번호</th><th>이름</th><th>확인코드</th><th>상태</th><th></th></tr></thead><tbody>'];
     list.forEach(function(s){
       var v = VOTES[s.code];
-      h2.push('<tr><td>'+s.n+'</td><td>'+esc(s.name)+'</td><td>'+s.code+'</td>'
-        + '<td>'+(v ? '<span class="pill yes">투표함</span>' : '<span class="pill no">아직</span>')+'</td>'
+      h2.push('<tr><td>'+(v?'':'<input type="checkbox" class="tChk" data-code="'+s.code+'">')+'</td>'
+        + '<td>'+s.n+'</td><td>'+esc(s.name)+'</td><td>'+s.code+'</td>'
+        + '<td>'+(v ? (v.c ? '<span class="pill yes">투표함</span>' : '<span class="pill yes">참여 표시됨</span>') : '<span class="pill no">아직</span>')+'</td>'
         + '<td>'+(v ? '<button class="btn sm ghost" data-tdel="'+s.code+'">재투표</button>' : '')+'</td></tr>');
     });
     h2.push('</tbody>');
     $('tTbl').innerHTML = h2.join('');
   }
+  renderManual();
   renderPrint();
 }
 $('tTbl').addEventListener('click', function(e){
@@ -3886,6 +3926,79 @@ $('tTbl').addEventListener('click', function(e){
   if(!confirm(byCode[code].name+'님의 투표를 지우고 다시 하게 할까요?')) return;
   resetVote(code, ROLEPW).then(function(ok){ if(ok){ toast('다시 투표할 수 있습니다','ok'); renderTeacher(); } });
 });
+
+/* ── 투표완료로 표시 (선택 / 전체) ── */
+function doMarkVoted(codes){
+  if(!codes.length){ toast('대상이 없습니다','bad'); return; }
+  sb.rpc('mark_voted', {p_pw: ROLEPW, p_codes: codes}).then(function(res){
+    if(res.error) throw res.error;
+    var d = res.data;
+    if(d && d.ok){
+      ONLINE = true;
+      codes.forEach(function(code){
+        if(!VOTES[code]){
+          var who = byCode[code];
+          VOTES[code] = { c:null, t:new Date().toISOString(), k: who?who.k:'S', where: who?whereOf(who):'', name: who?who.name:'' };
+        }
+      });
+      toast((d.marked||0)+'명을 투표완료로 표시했습니다','ok');
+      renderTeacher();
+    } else toast((d&&d.msg)||'처리하지 못했습니다','bad');
+  }).catch(function(e){ ONLINE=false; toast((e&&e.message)||'처리하지 못했습니다','bad'); });
+}
+$('tMarkSel').onclick = function(){
+  var codes = Array.prototype.map.call($('tTbl').querySelectorAll('.tChk:checked'), function(el){ return el.dataset.code; });
+  doMarkVoted(codes);
+};
+$('tMarkAll').onclick = function(){
+  var codes = Array.prototype.map.call($('tTbl').querySelectorAll('.tChk'), function(el){ return el.dataset.code; });
+  if(!codes.length){ toast('이미 모두 처리됐습니다','ok'); return; }
+  if(!confirm('현재 명단 '+codes.length+'명을 모두 "투표완료"로 표시할까요? (아직 실제로 투표하지 않은 사람만 대상입니다)')) return;
+  doMarkVoted(codes);
+};
+
+/* ── 반별 수기 집계 입력 ── */
+function currentTallyFor(g, c){
+  var out = {};
+  CLASS_TALLY.forEach(function(row){ if(row.grade===g && row.class_no===c) out[row.candidate_id] = row.count; });
+  return out;
+}
+function renderManual(){
+  var el = $('tManualForm'); if(!el) return;
+  if(TSCOPE==='T'){ el.innerHTML = ''; return; }
+  var sel = tSel();
+  var cur = currentTallyFor(sel.g, sel.c);
+  el.innerHTML = '<div class="hint" style="margin-bottom:10px">'+sel.g+'학년 '+sel.c+'반 · 학생 '+roster(sel.g,sel.c).length+'명</div>'
+    + CFG.candidates.map(function(cd){
+        var v = cur[cd.id] || 0;
+        return '<div class="row" style="align-items:center;margin-bottom:8px">'
+          + '<div style="flex:1">'+esc(cd.name)+'</div>'
+          + '<input type="number" min="0" class="inp tManualN" data-cid="'+cd.id+'" value="'+v+'" style="width:100px">'
+          + '</div>';
+      }).join('');
+  $('tManualState').textContent = '';
+}
+$('tManualSave').onclick = function(){
+  var sel = tSel();
+  var counts = {};
+  Array.prototype.forEach.call($('tManualForm').querySelectorAll('.tManualN'), function(inp){
+    counts[inp.dataset.cid] = Math.max(0, parseInt(inp.value,10) || 0);
+  });
+  var btn = this; btn.disabled = true;
+  sb.rpc('save_class_tally', {p_pw: ROLEPW, p_grade: sel.g, p_class_no: sel.c, p_counts: counts}).then(function(res){
+    btn.disabled = false;
+    if(res.error) throw res.error;
+    var d = res.data;
+    if(d && d.ok){
+      ONLINE = true;
+      CLASS_TALLY = CLASS_TALLY.filter(function(r){ return !(r.grade===sel.g && r.class_no===sel.c); });
+      Object.keys(counts).forEach(function(cid){ CLASS_TALLY.push({grade:sel.g, class_no:sel.c, candidate_id:cid, count:counts[cid]}); });
+      $('tManualState').textContent = '저장했습니다.';
+      toast('저장했습니다','ok');
+      renderTeacher();
+    } else toast((d&&d.msg)||'저장하지 못했습니다','bad');
+  }).catch(function(e){ btn.disabled=false; ONLINE=false; toast((e&&e.message)||'저장하지 못했습니다','bad'); });
+};
 $('tFindBtn').onclick = function(){ tFind($('tFind').value); };
 $('tFind').addEventListener('keydown', function(e){ if(e.key==='Enter') tFind(this.value); });
 function tFind(q){
